@@ -533,186 +533,90 @@
                                 </td>
 
                                 <td>
-                                    {% set next_status = {
-                                    'pending': 'confirmed',
-                                    'confirmed': 'preparing',
-                                    'preparing': 'ready'
-                                    } if staff_type == 'bakery' else {
-                                    'ready': 'out_for_delivery',
-                                    'out_for_delivery': 'completed'
-                                    } %}
-
-                                    {% set next = next_status.get(o.status) %}
-
-                                    {% if staff_type == 'bakery'
-                                    and o.order_type == 'delivery'
-                                    and o.status == 'completed' %}
-
-                                    <form
-                                        method="post"
-                                        action="{{ url_for('staff.payment_received', order_id=o.id) }}"
-                                        data-staff-confirm="Confirm COD Payment">
-
-                                        <input type="hidden"
-                                            name="csrf_token"
-                                            value="{{ csrf_token() }}">
-
-                                        <button class="staff-primary-btn"
-                                            type="submit">
-                                            Payment Received
-                                        </button>
-                                    </form>
-
-                                    {% elif staff_type == 'bakery'
-                                    and o.status == 'ready' %}
-
-                                    {% if o.order_type == 'delivery' %}
-
-                                    <div class="staff-rider-assignment">
-
-                                        {% if o.rider_user_id %}
-
-                                        <div class="staff-rider-assigned">
-                                            <span
-                                                class="staff-rider-dot"></span>
-
-                                            <div>
-                                                <strong>Rider Assigned</strong>
-                                                <small>
-                                                    {{ o.rider_first_name or
-                                                    'Rider' }}
-                                                    {{ o.rider_last_name or ''
-                                                    }}
-                                                </small>
+                                    {% if staff_type == 'bakery' %}
+                                        {% if o.status in ('pending_verification', 'pending') %}
+                                            <div class="staff-order-actions">
+                                                {% if o.status == 'pending_verification' %}
+                                                    <form method="post" action="{{ url_for('staff.change_status', order_id=o.id) }}" data-staff-confirm="Verify Order">
+                                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                        <input type="hidden" name="status" value="pending">
+                                                        <button type="submit" class="staff-primary-btn">Verify Order</button>
+                                                    </form>
+                                                {% else %}
+                                                    <form method="post" action="{{ url_for('staff.change_status', order_id=o.id) }}" data-staff-confirm="Accept Order">
+                                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                        <input type="hidden" name="status" value="confirmed">
+                                                        <button type="submit" class="staff-primary-btn">Accept Order</button>
+                                                    </form>
+                                                {% endif %}
+                                                <form method="post" action="{{ url_for('staff.change_status', order_id=o.id) }}" data-staff-confirm="Reject Order">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                    <input type="hidden" name="status" value="rejected">
+                                                    <button type="submit" class="staff-secondary-btn staff-reject-btn">Reject</button>
+                                                </form>
                                             </div>
-                                        </div>
-
+                                        {% elif o.status in ('confirmed', 'preparing') %}
+                                            <form method="post" action="{{ url_for('staff.change_status', order_id=o.id) }}" data-staff-confirm="Update Order Status">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                <input type="hidden" name="status" value="{{ 'preparing' if o.status == 'confirmed' else 'ready' }}">
+                                                <button type="submit" class="staff-primary-btn">
+                                                    {{ 'Start Preparing' if o.status == 'confirmed' else 'Mark Ready' }}
+                                                </button>
+                                            </form>
+                                        {% elif o.order_type == 'delivery' and
+                                            (o.status == 'ready' or (o.status == 'out_for_delivery' and not o.rider_user_id)) %}
+                                            <div class="staff-rider-assignment">
+                                                {% if o.rider_user_id %}
+                                                    <div class="staff-rider-assigned">
+                                                        <span class="staff-rider-dot"></span>
+                                                        <div>
+                                                            <strong>Rider Assigned</strong>
+                                                            <small>{{ o.rider_first_name or 'Rider' }} {{ o.rider_last_name or '' }}</small>
+                                                        </div>
+                                                    </div>
+                                                {% else %}
+                                                    <span class="staff-rider-pending">Awaiting Rider Assignment</span>
+                                                {% endif %}
+                                                {% if riders %}
+                                                    <form class="staff-assign-rider-form" method="post" action="{{ url_for('staff.bakery_assign_rider', order_id=o.id) }}" data-staff-confirm="Assign Delivery Rider">
+                                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                        <label for="rider-{{ o.id }}" class="staff-rider-label">Delivery Rider</label>
+                                                        <select name="rider_id" id="rider-{{ o.id }}" required>
+                                                            <option value="">Select rider</option>
+                                                            {% for rider in riders %}
+                                                                <option value="{{ rider.id }}" {% if o.rider_user_id == rider.id %}selected{% endif %}>{{ rider.first_name }} {{ rider.last_name }}</option>
+                                                            {% endfor %}
+                                                        </select>
+                                                        <button type="submit" class="staff-primary-btn">{{ 'Change Rider' if o.rider_user_id else 'Assign Rider' }}</button>
+                                                    </form>
+                                                {% else %}
+                                                    <p class="staff-rider-warning">No available riders. Ask the administrator to enable a rider account.</p>
+                                                {% endif %}
+                                            </div>
+                                        {% elif o.order_type == 'pickup' and o.status == 'ready' %}
+                                            <form method="post" action="{{ url_for('staff.change_status', order_id=o.id) }}" data-staff-confirm="Complete Pickup">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                <input type="hidden" name="status" value="completed">
+                                                <button type="submit" class="staff-primary-btn">Complete Pickup</button>
+                                            </form>
+                                        {% elif o.order_type == 'delivery' and o.status == 'completed' %}
+                                            <form method="post" action="{{ url_for('staff.payment_received', order_id=o.id) }}" data-staff-confirm="Confirm COD Payment">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                <button type="submit" class="staff-primary-btn">Payment Received</button>
+                                            </form>
                                         {% else %}
-
-                                        <span class="staff-rider-pending">
-                                            Awaiting Rider Assignment
-                                        </span>
-
+                                            <span class="staff-muted">No action available</span>
                                         {% endif %}
-
-                                        {% if riders %}
-
-                                        <form
-                                            class="staff-assign-rider-form"
-                                            method="post"
-                                            action="{{ url_for(
-                            'staff.bakery_assign_rider',
-                            order_id=o.id
-                        ) }}"
-                                            data-staff-confirm="Assign Delivery Rider">
-
-                                            <input type="hidden"
-                                                name="csrf_token"
-                                                value="{{ csrf_token() }}">
-
-                                            <label for="rider-{{ o.id }}"
-                                                class="staff-rider-label">
-                                                Select Delivery Rider
-                                            </label>
-
-                                            <select name="rider_id"
-                                                id="rider-{{ o.id }}"
-                                                required>
-
-                                                <option value>
-                                                    Select rider
-                                                </option>
-
-                                                {% for rider in riders %}
-
-                                                <option
-                                                    value="{{ rider.id }}"
-                                                    {% if o.rider_user_id ==
-                                                    rider.id %}
-                                                    selected
-                                                    {% endif %}>
-                                                    {{ rider.first_name }}
-                                                    {{ rider.last_name }}
-                                                </option>
-
-                                                {% endfor %}
-
-                                            </select>
-
-                                            <button type="submit"
-                                                class="staff-primary-btn">
-                                                {{ 'Update Rider'
-                                                if o.rider_user_id
-                                                else 'Assign Rider' }}
-                                            </button>
-                                        </form>
-
+                                    {% else %}
+                                        {% if o.status in ('ready', 'out_for_delivery') %}
+                                            <form method="post" action="{{ url_for('staff.change_status', order_id=o.id) }}" data-staff-confirm="Update Order Status">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                <input type="hidden" name="status" value="{{ 'out_for_delivery' if o.status == 'ready' else 'completed' }}">
+                                                <button type="submit" class="staff-primary-btn">{{ 'Out for Delivery' if o.status == 'ready' else 'Mark Delivered' }}</button>
+                                            </form>
                                         {% else %}
-
-                                        <p class="staff-rider-warning">
-                                            No available riders.
-                                            Contact the administrator.
-                                        </p>
-
+                                            <span class="staff-muted">Waiting for Bakery</span>
                                         {% endif %}
-
-                                    </div>
-
-                                    {% else %}
-
-                                    <span class="staff-muted">
-                                        Ready for Pickup
-                                    </span>
-
-                                    {% endif %}
-
-                                    {% elif staff_type == 'rider'
-                                    and o.status in ['confirmed', 'preparing']
-                                    %}
-
-                                    <span class="staff-muted">
-                                        Waiting for Bakery
-                                    </span>
-
-                                    {% elif next %}
-
-                                    <form
-                                        method="post"
-                                        action="{{ url_for(
-                'staff.change_status',
-                order_id=o.id
-            ) }}"
-                                        data-staff-confirm="Update Order Status">
-
-                                        <input type="hidden"
-                                            name="csrf_token"
-                                            value="{{ csrf_token() }}">
-
-                                        <input type="hidden"
-                                            name="status"
-                                            value="{{ next }}">
-
-                                        <button class="staff-primary-btn"
-                                            type="submit">
-
-                                            {{ {
-                                            'confirmed': 'Confirm Order',
-                                            'preparing': 'Start Preparing',
-                                            'ready': 'Mark Ready',
-                                            'out_for_delivery':
-                                            'Out for Delivery',
-                                            'completed': 'Mark Delivered'
-                                            }.get(next, next) }}
-
-                                        </button>
-                                    </form>
-
-                                    {% else %}
-
-                                    <span class="staff-muted">
-                                        No action available
-                                    </span>
-
                                     {% endif %}
                                 </td>
 
@@ -838,42 +742,25 @@
 
             title.textContent = action;
            
+            const descriptions = {
+                'Verify Order': 'Review this order before changing it to Pending. This does not automatically verify a payment.',
+                'Accept Order': 'Accept this order? Recipe ingredients will be deducted from available inventory.',
+                'Reject Order': 'Reject this order? Paid orders must be reviewed by an administrator.',
+                'Update Order Status': 'Confirm this order progress update.',
+                'Complete Pickup': 'Complete pickup only after the customer receives the order and full payment is recorded.',
+                'Confirm COD Payment': 'Confirm only after receiving the full cash payment.',
+            };
+
             if (action === 'Assign Delivery Rider') {
-
-                const selected = form.querySelector(
-                    'select[name="rider_id"]'
-                );
-
-                const riderName = selected
-                    ?.selectedOptions[0]
-                    ?.textContent.trim() || "this rider";
-
-                description.textContent =
-                    `Assign this delivery to ${riderName}? ` +
-                    "The selected rider will see the " +
-                    "order in their workspace.";
-
-                accept.textContent = "Confirm Assignment";
-
-            } else if (action === 'Confirm COD Payment') {
-
-                description.textContent =
-                    "Confirm only after receiving " +
-                    "the full cash payment.";
-
-                accept.textContent = "Confirm Payment";
-
+                const selected = form.querySelector('select[name="rider_id"]');
+                const riderName = selected?.selectedOptions[0]?.textContent.trim() || 'the selected rider';
+                description.textContent = 'Assign this order to ' + riderName + '? The rider will see it in My Deliveries.';
             } else {
-
-                description.textContent =
-                    "Review this status update. " +
-                    "New order confirmation requires " +
-                    "an active recipe and sufficient stock.";
-
-                accept.textContent = "Update Status";
-
+                description.textContent = descriptions[action] || 'Review this action before continuing.';
             }
 
+            accept.textContent = action === 'Assign Delivery Rider' ? 'Confirm Assignment' : 'Confirm';
+            accept.disabled = false;
         });
     });
 
