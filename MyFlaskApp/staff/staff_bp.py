@@ -379,19 +379,19 @@ def change_status(order_id):
         if not allowed:
             raise ValueError("That action is not allowed for this order or staff account.")
 
-        if order["order_type"] == "pickup":
-            if target == "rejected":
-                # Paid pickup orders require refund review by admin.
-                cur.execute(
-                    """SELECT 1 FROM payments
-                       WHERE order_id=%s AND status='paid' LIMIT 1""",
-                    (order_id,),
+        # Any recorded payment requires admin refund review before rejection.
+        if target == "rejected":
+            cur.execute(
+                """SELECT 1 FROM payments
+                   WHERE order_id=%s AND status='paid' LIMIT 1""",
+                (order_id,),
+            )
+            if cur.fetchone():
+                raise ValueError(
+                    "Payment already recorded. Ask admin to review before rejection."
                 )
-                if cur.fetchone():
-                    raise ValueError(
-                        "Payment already recorded. Ask admin to review before rejection."
-                    )
 
+        if order["order_type"] == "pickup":
             if target in ("confirmed", "preparing", "ready", "completed"):
                 deposit_due = Decimal(str(order["pickup_deposit_due"] or 0))
                 balance_due = Decimal(str(order["pickup_balance_due"] or 0))
