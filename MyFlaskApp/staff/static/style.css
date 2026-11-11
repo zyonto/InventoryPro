@@ -634,3 +634,24 @@ input:focus-visible {
         max-width: none;
     }
 }
+
+
+/* Bakery staff order review / dispatch controls */
+.staff-order-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.staff-order-actions form { margin: 0; }
+.staff-secondary-btn { background: #fff; border: 1px solid #dfd4e9; color: #76518e; font-size: 12px; font-weight: 600; }
+.staff-secondary-btn:hover { background: #f7f3fb; }
+.staff-reject-btn { color: #a43e3a; border-color: #eacaca; background: #fff9f8; }
+.staff-reject-btn:hover { background: #fff0ee; }
+.staff-rider-assignment { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 200px; }
+.staff-rider-pending { display: inline-block; border-radius: 7px; background: #fff8ed; color: #91661e; padding: 7px 10px; font-weight: 600; font-size: 11px; }
+.staff-rider-assigned { width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px 11px; border: 1px solid #d9e9df; border-radius: 8px; background: #f4faf6; }
+.staff-rider-assigned strong, .staff-rider-assigned small { display: block; font-size: 11px; color: #286b49; }
+.staff-rider-dot { background: #399567; border-radius: 50%; height: 8px; width: 8px; flex-shrink: 0; }
+.staff-rider-warning { margin: 0; font-size: 11px; color: #975c2f; line-height: 1.5; }
+.staff-assign-rider-form { display: flex; flex-direction: column; gap: 8px; width: 100%; margin: 0; }
+.staff-rider-label { font-size: 11px; font-weight: 600; color: #635371; }
+.staff-assign-rider-form select { width: 100%; min-height: 39px; border: 1px solid #ded2e9; border-radius: 8px; padding: 9px 11px; background: white; color: #382b47; font: inherit; font-size: 12px; }
+.staff-assign-rider-form select:focus-visible { outline: 2px solid #9473ac; outline-offset: 2px; }
+.staff-assign-rider-form .staff-primary-btn { width: 100%; }
+@media (max-width: 600px) { .staff-order-actions { flex-direction: column; align-items: stretch; } .staff-order-actions button { width: 100%; } }

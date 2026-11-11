@@ -1,4 +1,5 @@
 import re
+from decimal import Decimal
 from functools import wraps
 
 from flask import (Blueprint, abort, flash, redirect, render_template,
@@ -63,115 +64,91 @@ def audit(cur, user_id, action, entity, entity_id, details):
 @staff_bp.get("/")
 @staff_only
 def dashboard():
-
     user = current_user()
     staff_type = profile(user)["staff_type"]
-
     riders = []
 
     if staff_type == "rider":
-
-        # Riders only see deliveries assigned to them.
         orders = get_all(
             """
-            SELECT
-                o.id,
-                o.order_number,
-                o.order_type,
-                o.status,
-                o.recipient_name,
-                o.contact_number,
-                o.delivery_address_snapshot,
-                o.total_amount
+            SELECT o.id, o.order_number, o.order_type, o.status,
+                   o.recipient_name, o.contact_number,
+                   o.delivery_address_snapshot, o.total_amount
             FROM orders o
-            JOIN delivery_assignments d
-                ON d.order_id = o.id
+            JOIN delivery_assignments d ON d.order_id = o.id
             WHERE d.rider_user_id = %s
               AND o.order_type = 'delivery'
-              AND o.status IN (
-                  'ready',
-                  'out_for_delivery'
-              )
-            ORDER BY o.created_at DESC
+              AND o.status IN ('ready', 'out_for_delivery')
+            ORDER BY o.created_at ASC, o.id ASC
             LIMIT 100
             """,
-            (user["id"],)
+            (user["id"],),
         )
-
     else:
-
-        # Bakery staff sees pending and active orders,
-        # including each delivery's assigned rider.
+        # Bakery staff can see new customer orders, including those
+        # still awaiting verification; previously dispatched orders
+        # without a rider are surfaced for assignment recovery.
         orders = get_all(
             """
-            SELECT
-                o.id,
-                o.order_number,
-                o.order_type,
-                o.status,
-                o.recipient_name,
-                o.contact_number,
-                o.delivery_address_snapshot,
-                o.total_amount,
-                d.rider_user_id,
-                ru.first_name AS rider_first_name,
-                ru.last_name AS rider_last_name
+            SELECT o.id, o.order_number, o.order_type, o.status,
+                   o.recipient_name, o.contact_number,
+                   o.delivery_address_snapshot, o.total_amount,
+                   d.rider_user_id,
+                   ru.first_name AS rider_first_name,
+                   ru.last_name AS rider_last_name
             FROM orders o
-            LEFT JOIN delivery_assignments d
-                ON d.order_id = o.id
-            LEFT JOIN users ru
-                ON ru.id = d.rider_user_id
+            LEFT JOIN delivery_assignments d ON d.order_id = o.id
+            LEFT JOIN users ru ON ru.id = d.rider_user_id
             WHERE o.status IN (
-                'pending',
-                'confirmed',
-                'preparing',
-                'ready'
+                'pending_verification', 'pending', 'confirmed',
+                'preparing', 'ready'
+            )
+            OR (
+                o.status = 'out_for_delivery'
+                AND o.order_type = 'delivery'
+                AND d.rider_user_id IS NULL
             )
             OR (
                 o.status = 'completed'
                 AND o.order_type = 'delivery'
                 AND o.payment_method = 'cod'
                 AND EXISTS (
-                    SELECT 1
-                    FROM payments p
-                    WHERE p.order_id = o.id
-                      AND p.status = 'unpaid'
+                    SELECT 1 FROM payments p
+                    WHERE p.order_id = o.id AND p.status = 'unpaid'
                 )
             )
-            ORDER BY o.created_at DESC
+            ORDER BY
+                CASE o.status
+                    WHEN 'pending_verification' THEN 0
+                    WHEN 'pending' THEN 1
+                    WHEN 'confirmed' THEN 2
+                    WHEN 'preparing' THEN 3
+                    WHEN 'ready' THEN 4
+                    ELSE 5
+                END,
+                o.created_at ASC, o.id ASC
             LIMIT 100
             """
         )
 
-        # Only enabled, active rider accounts
-        # appear in the assignment dropdown.
         riders = get_all(
             """
-            SELECT
-                u.id,
-                u.first_name,
-                u.last_name
+            SELECT u.id, u.first_name, u.last_name
             FROM users u
-            JOIN staff_profiles sp
-                ON sp.user_id = u.id
+            JOIN staff_profiles sp ON sp.user_id = u.id
             WHERE u.role = 'staff'
               AND u.account_status = 'active'
               AND sp.staff_type = 'rider'
               AND sp.is_enabled = 1
-            ORDER BY
-                u.first_name,
-                u.last_name
+            ORDER BY u.first_name, u.last_name
             """
         )
 
     return render_template(
-        "staff_dashboard.html",
-        view="staff",
-        user=user,
-        staff_type=staff_type,
-        orders=orders,
-        riders=riders
+        "staff_dashboard.html", view="staff", user=user,
+        staff_type=staff_type, orders=orders, riders=riders,
     )
+
 
 # ==========================================
 # BAKERY STAFF - ASSIGN DELIVERY RIDER
@@ -241,11 +218,16 @@ def bakery_assign_rider(order_id):
 
         # Assignment starts when the bakery
         # has finished preparing the order.
-        if order["status"] != "ready":
-            raise ValueError(
-                "Only Ready orders can be assigned "
-                "by bakery staff."
+        if order["status"] not in ("ready", "out_for_delivery"):
+            raise ValueError("Only ready or dispatched orders can be assigned.")
+
+        if order["status"] == "out_for_delivery":
+            cur.execute(
+                "SELECT rider_user_id FROM delivery_assignments WHERE order_id=%s FOR UPDATE",
+                (order_id,),
             )
+            if cur.fetchone():
+                raise ValueError("A rider is already assigned. Contact admin for reassignment.")
 
         # Verify the selected rider is active.
         cur.execute(
@@ -348,57 +330,104 @@ def bakery_assign_rider(order_id):
 def change_status(order_id):
     user = current_user()
     staff_type = profile(user)["staff_type"]
-    target = request.form.get("status", "")
+    target = request.form.get("status", "").strip()
     conn = mysql.connection
     cur = conn.cursor(DictCursor)
     try:
         conn.begin()
         cur.execute(
-            """SELECT id, status, order_type FROM orders
-               WHERE id = %s FOR UPDATE""", (order_id,)
+            """SELECT id, status, order_type, pickup_deposit_due,
+                      pickup_balance_due FROM orders
+               WHERE id = %s FOR UPDATE""",
+            (order_id,),
         )
         order = cur.fetchone()
         if not order:
-            abort(404)
+            raise ValueError("Order not found.")
 
-        # Both staff groups share this route, but not the same permissions.
+        current_status = order["status"]
         if staff_type == "bakery":
-            allowed = {
-                "pending": "confirmed",
-                "confirmed": "preparing",
-                "preparing": "ready",
+            transitions = {
+                "pending_verification": ("pending", "rejected"),
+                "pending": ("confirmed", "rejected"),
+                "confirmed": ("preparing",),
+                "preparing": ("ready",),
             }
-            valid = allowed.get(order["status"]) == target
-            # A pickup order can only finish after its full payment is recorded.
-            if order["order_type"] == "pickup" and order["status"] == "ready" and target == "completed":
-                cur.execute(
-                    """SELECT o.total_amount,
-                           COALESCE(SUM(CASE WHEN p.status='paid' THEN p.amount ELSE 0 END),0) paid
-                       FROM orders o LEFT JOIN payments p ON p.order_id=o.id
-                       WHERE o.id=%s GROUP BY o.id, o.total_amount""", (order_id,)
-                )
-                totals = cur.fetchone()
-                valid = totals and totals["paid"] >= totals["total_amount"]
+            allowed = target in transitions.get(current_status, ())
+            if (
+                order["order_type"] == "pickup"
+                and current_status == "ready"
+                and target == "completed"
+            ):
+                allowed = True
         else:
-            valid = (order["order_type"] == "delivery" and
-                     {"ready": "out_for_delivery",
-                      "out_for_delivery": "completed"}.get(order["status"]) == target)
-            if valid:
+            allowed = (
+                order["order_type"] == "delivery"
+                and target == {
+                    "ready": "out_for_delivery",
+                    "out_for_delivery": "completed",
+                }.get(current_status)
+            )
+            if allowed:
                 cur.execute(
                     """SELECT 1 FROM delivery_assignments
                        WHERE order_id=%s AND rider_user_id=%s""",
                     (order_id, user["id"]),
                 )
-                valid = cur.fetchone() is not None
+                allowed = cur.fetchone() is not None
 
-        if not valid:
+        if not allowed:
             raise ValueError("That action is not allowed for this order or staff account.")
+
+        # Any recorded payment requires admin refund review before rejection.
+        if target == "rejected":
+            cur.execute(
+                """SELECT 1 FROM payments
+                   WHERE order_id=%s AND status='paid' LIMIT 1""",
+                (order_id,),
+            )
+            if cur.fetchone():
+                raise ValueError(
+                    "Payment already recorded. Ask admin to review before rejection."
+                )
+
+        if order["order_type"] == "pickup":
+            if target in ("confirmed", "preparing", "ready", "completed"):
+                deposit_due = Decimal(str(order["pickup_deposit_due"] or 0))
+                balance_due = Decimal(str(order["pickup_balance_due"] or 0))
+                if deposit_due <= 0:
+                    raise ValueError("Pickup deposit is not configured. Contact admin.")
+                cur.execute(
+                    """SELECT payment_purpose, COALESCE(SUM(amount), 0) total_paid
+                       FROM payments
+                       WHERE order_id=%s AND status='paid'
+                         AND payment_purpose IN ('pickup_deposit', 'pickup_balance')
+                       GROUP BY payment_purpose""",
+                    (order_id,),
+                )
+                paid = {
+                    p["payment_purpose"]: Decimal(str(p["total_paid"]))
+                    for p in cur.fetchall()
+                }
+                if paid.get("pickup_deposit", Decimal("0")) < deposit_due:
+                    raise ValueError("Verify pickup deposit before proceeding.")
+                if (
+                    target == "completed"
+                    and paid.get("pickup_balance", Decimal("0")) < balance_due
+                ):
+                    raise ValueError("Record remaining pickup balance before completion.")
+
         if target == "confirmed":
-            deduct_order_recipe_stock(cur=cur, order_id=order_id,
-                                      actor_id=user["id"])
-        cur.execute("UPDATE orders SET status=%s WHERE id=%s", (target, order_id))
-        audit(cur, user["id"], "staff_order_status", "orders", order_id,
-              f"{staff_type}: {order['status']} -> {target}")
+            deduct_order_recipe_stock(
+                cur=cur, order_id=order_id, actor_id=user["id"]
+            )
+        cur.execute(
+            "UPDATE orders SET status=%s WHERE id=%s", (target, order_id)
+        )
+        audit(
+            cur, user["id"], "staff_order_status", "orders", order_id,
+            f"{staff_type}: {current_status} -> {target}",
+        )
         conn.commit()
         flash("Order status updated.", "success")
     except ValueError as exc:
@@ -406,7 +435,8 @@ def change_status(order_id):
         flash(str(exc), "danger")
     except Exception:
         conn.rollback()
-        # Do not reveal database internals to staff.
+        from flask import current_app
+        current_app.logger.exception("Staff order status update failed")
         flash("Unable to update this order. Please contact the admin.", "danger")
     finally:
         cur.close()
